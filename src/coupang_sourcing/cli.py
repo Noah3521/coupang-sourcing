@@ -8,7 +8,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from . import storage
+from . import exporters, scheduler, storage
 from .collectors import batch as batch_mod
 from .collectors import product as product_mod
 from .collectors import store as store_mod
@@ -18,6 +18,8 @@ from .models import ProductRecord
 from .urls import parse_product, parse_store
 
 app = typer.Typer(add_completion=False, help="Coupang product sourcing collector.")
+schedule_app = typer.Typer(help="Manage a periodic `refresh` schedule (macOS launchd).")
+app.add_typer(schedule_app, name="schedule")
 out_console = Console()
 err_console = Console(stderr=True)
 
@@ -248,6 +250,92 @@ def refresh(
         storage.save_record(cfg.db_path, record)
         done += 1
     out_console.print(f"[green]refreshed[/green] {done}/{len(targets)} products → snapshots appended")
+
+
+@app.command()
+def export(
+    table: str = typer.Option("products", "--table",
+                              help="products | reviews | product_snapshots | product_variants | stores"),
+    fmt: str = typer.Option("csv", "--format", help="csv | json"),
+    out: Path | None = typer.Option(None, "--out", help="Output file (default coupang_<table>.<fmt>)."),
+    db: Path = typer.Option(Path("coupang_sourcing.db"), "--db"),
+    store: str | None = typer.Option(None, "--store", help="Filter products by store url-name."),
+    min_score: float | None = typer.Option(None, "--min-score", help="Filter products by sourcing score."),
+):
+    """Export a DB table (or the products view) to CSV/JSON."""
+    if fmt not in ("csv", "json"):
+        err_console.print("[red]--format must be csv or json[/red]")
+        raise typer.Exit(1)
+    if not db.exists():
+        err_console.print(f"[red]db not found:[/red] {db}")
+        raise typer.Exit(1)
+    try:
+        path, count = exporters.export_table(db, table, fmt, out, store=store, min_score=min_score)
+    except ValueError as exc:
+        err_console.print(f"[red]error:[/red] {exc}")
+        raise typer.Exit(1) from exc
+    out_console.print(f"[green]exported[/green] {count} rows from '{table}' → {path}")
+
+
+def _refresh_args_from(store: str | None, all_products: bool, older_than: int | None) -> list[str]:
+    args: list[str] = []
+    if all_products:
+        args.append("--all")
+    if store:
+        args += ["--store", store]
+    if older_than is not None:
+        args += ["--older-than", str(older_than)]
+    return args or ["--all"]
+
+
+@schedule_app.command("install")
+def schedule_install(
+    interval: str = typer.Option("daily", "--interval", help="hourly | daily | weekly"),
+    at: str | None = typer.Option(None, "--at", help="HH:MM for daily/weekly (default 03:00)."),
+    db: Path = typer.Option(Path("coupang_sourcing.db"), "--db"),
+    store: str | None = typer.Option(None, "--store", help="Refresh only this store."),
+    all_products: bool = typer.Option(False, "--all", help="Refresh all (default if none given)."),
+    older_than: int | None = typer.Option(None, "--older-than"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Print the plist/cron line without installing."),
+):
+    """Install a launchd agent that runs `refresh` on a schedule."""
+    if interval not in scheduler.INTERVALS:
+        err_console.print(f"[red]--interval must be one of {scheduler.INTERVALS}[/red]")
+        raise typer.Exit(1)
+    refresh_args = _refresh_args_from(store, all_products, older_than)
+    if not scheduler.is_macos():
+        line = scheduler.crontab_line(refresh_args, db, interval, at)
+        out_console.print("[yellow]not macOS[/yellow] — add this cron line manually (crontab -e):")
+        typer.echo(line)
+        raise typer.Exit(0)
+    if dry_run:
+        program = scheduler.build_program_args(refresh_args, db)
+        typer.echo(scheduler.build_plist(program, interval, at))
+        raise typer.Exit(0)
+    path = scheduler.install(refresh_args, db, interval, at)
+    out_console.print(f"[green]installed[/green] launchd agent → {path}")
+    out_console.print(f"runs: refresh {' '.join(refresh_args)} ({interval}{' @' + at if at else ''})")
+
+
+@schedule_app.command("uninstall")
+def schedule_uninstall():
+    """Remove the launchd agent."""
+    if scheduler.uninstall():
+        out_console.print("[green]uninstalled[/green] launchd agent")
+    else:
+        out_console.print("[yellow]no agent installed[/yellow]")
+
+
+@schedule_app.command("status")
+def schedule_status():
+    """Show whether the schedule is installed and loaded."""
+    info = scheduler.status()
+    table = Table(show_header=False)
+    table.add_column("field", style="cyan")
+    table.add_column("value")
+    for key in ("label", "installed", "loaded", "plist", "log"):
+        table.add_row(key, str(info[key]))
+    out_console.print(table)
 
 
 if __name__ == "__main__":

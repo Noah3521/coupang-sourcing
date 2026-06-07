@@ -9,6 +9,7 @@ import dataclasses
 import json
 from pathlib import Path
 
+from . import storage
 from .models import ProductRecord
 from .normalize import public_product_row, public_review_row
 
@@ -42,3 +43,47 @@ def export_product(out_dir: Path, record: ProductRecord) -> dict[str, str]:
     write_record_json(json_path, record)
     write_review_csv(csv_path, record)
     return {"record": str(json_path.resolve()), "reviewsCsv": str(csv_path.resolve())}
+
+
+def rows_to_csv(path: Path, rows: list[dict]) -> None:
+    """Write list-of-dict rows to CSV, using the union of keys as header."""
+    fields: list[str] = []
+    for row in rows:
+        for key in row:
+            if key not in fields:
+                fields.append(key)
+    with path.open("w", encoding="utf-8-sig", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def rows_to_json(path: Path, rows: list[dict]) -> None:
+    path.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _default_filename(table: str, fmt: str) -> str:
+    return f"coupang_{table}.{fmt}"
+
+
+def export_table(
+    db_path: Path, table: str, fmt: str, out: Path | None,
+    *, store: str | None = None, min_score: float | None = None,
+) -> tuple[Path, int]:
+    """Export one DB table (or the products view) to CSV/JSON. Returns (path, row_count)."""
+    conn = storage.connect(db_path)
+    try:
+        if table == "products":
+            rows = storage.fetch_products(conn, store=store, min_score=min_score)
+        else:
+            rows = storage.fetch_table(conn, table)
+    finally:
+        conn.close()
+    path = out or Path(_default_filename(table, fmt))
+    if path.parent and not path.parent.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+    if fmt == "json":
+        rows_to_json(path, rows)
+    else:
+        rows_to_csv(path, rows)
+    return path.resolve(), len(rows)

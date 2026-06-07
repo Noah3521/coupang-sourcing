@@ -158,3 +158,35 @@ def table_counts(db_path: Path) -> dict[str, int]:
         return {t: conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in tables}
     finally:
         conn.close()
+
+
+# Tables that `export` is allowed to dump (whitelist guards the f-string query).
+EXPORTABLE_TABLES = ("products", "reviews", "product_snapshots", "product_variants", "stores", "vendor_map")
+
+
+def fetch_products(
+    conn: sqlite3.Connection, *, store: str | None = None, min_score: float | None = None
+) -> list[dict[str, Any]]:
+    """Products joined with store url-name, newest crawl first, optionally filtered."""
+    query = (
+        "SELECT p.product_id, p.title, p.store_name, s.url_name AS store, p.vendor_id, "
+        "p.latest_price, p.original_price, p.discount_rate, p.rating_avg, p.review_total, "
+        "p.channel, p.is_ad, p.sourcing_score, p.link, p.first_seen, p.last_crawled "
+        "FROM products p LEFT JOIN stores s ON p.store_id = s.store_id WHERE 1=1"
+    )
+    params: list[Any] = []
+    if store:
+        query += " AND s.url_name = ?"
+        params.append(store)
+    if min_score is not None:
+        query += " AND p.sourcing_score >= ?"
+        params.append(min_score)
+    query += " ORDER BY p.sourcing_score DESC, p.review_total DESC"
+    return [dict(r) for r in conn.execute(query, params).fetchall()]
+
+
+def fetch_table(conn: sqlite3.Connection, table: str) -> list[dict[str, Any]]:
+    """Dump a whitelisted table as a list of dict rows."""
+    if table not in EXPORTABLE_TABLES:
+        raise ValueError(f"table not exportable: {table}")
+    return [dict(r) for r in conn.execute(f"SELECT * FROM {table}").fetchall()]

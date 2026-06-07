@@ -43,10 +43,34 @@ coupang-sourcing batch examples/batch_input.csv --db sourcing.db
 # re-crawl to append price/review snapshots (trend tracking)
 coupang-sourcing refresh --all --db sourcing.db
 coupang-sourcing refresh --store A00333576 --older-than 7 --db sourcing.db
+
+# export DB tables to CSV/JSON
+coupang-sourcing export --table products --format csv --out products.csv --db sourcing.db
+coupang-sourcing export --table products --min-score 70 --store A00333576 --db sourcing.db
+coupang-sourcing export --table reviews --format json --out reviews.json --db sourcing.db
+
+# schedule periodic refresh (macOS launchd; prints a cron line on other OSes)
+coupang-sourcing schedule install --interval daily --at 03:00 --all --db sourcing.db
+coupang-sourcing schedule install --interval daily --dry-run    # preview the plist, install nothing
+coupang-sourcing schedule status
+coupang-sourcing schedule uninstall
 ```
 
 Add `--json` for machine-readable output, `--no-reviews` to skip review collection,
 `--out DIR` (on `product`) to also dump JSON + reviews CSV.
+
+### export
+
+Dumps a table (`products`, `reviews`, `product_snapshots`, `product_variants`, `stores`,
+`vendor_map`) to CSV or JSON. The `products` table can be filtered with `--store` and
+`--min-score` and is sorted by sourcing score. Table names are whitelisted.
+
+### schedule
+
+Installs a launchd LaunchAgent (`~/Library/LaunchAgents/com.coupang-sourcing.refresh.plist`)
+that runs `refresh` on an `hourly` / `daily` / `weekly` cadence, logging to
+`~/Library/Logs/coupang-sourcing-refresh.log`. Use `--dry-run` to preview the plist without
+installing. On non-macOS hosts it prints a `crontab -e` line instead.
 
 ## Data model (SQLite)
 
