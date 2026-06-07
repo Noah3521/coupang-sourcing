@@ -1,0 +1,30 @@
+# coupang-sourcing config. Copy to config.toml (or ~/.config/coupang-sourcing/config.toml).
+# Every key is optional; CLI flags override these.
+
+db_path = "coupang_sourcing.db"
+
+# Politeness / anti-block (keep delays > 0 to avoid tripping the edge).
+rate_delay = 0.3      # base seconds between requests
+jitter = 0.2          # extra random 0..jitter seconds
+timeout = 12.0
+retries = 2
+retry_delay = 0.3
+
+# Review collection
+review_size = 30          # capped to 30 by Coupang
+max_review_pages = 0      # 0 = all pages
+
+# Listing scan
+listing_max_pages = 0     # 0 = scan until found / exhausted (safety cap 500)
+
+# Sourcing estimate: rough sales-per-review multiplier (only a fraction of buyers review).
+sale_multiplier = 10.0
+
+# Negative-review risk keywords
+complaint_keywords = ["불량", "파손", "환불", "반품", "지연", "느림", "오배송", "하자", "고장", "냄새"]
+
+# Composite sourcing-score weights: score = w.demand*demand + w.quality*quality - w.risk*risk
+[scoring_weights]
+demand = 1.0
+quality = 1.0
+risk = 1.0
