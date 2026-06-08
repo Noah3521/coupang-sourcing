@@ -1,0 +1,17 @@
+{
+  "_comment": "Merge this into ~/.openclaw/openclaw.json under mcp.servers (replace <YOU>/paths). Or just run `openclaw mcp add` — see docs/OPENCLAW.md / install.sh.",
+  "mcp": {
+    "servers": {
+      "coupang": {
+        "command": "/Users/<YOU>/coupang-sourcing/.venv/bin/python",
+        "args": ["-m", "coupang_sourcing.mcp_server"],
+        "env": {
+          "COUPANG_SOURCING_DB": "/Users/<YOU>/.coupang-sourcing/sourcing.db",
+          "COUPANG_MAX_REVIEW_PAGES": "3"
+        },
+        "timeout": 300,
+        "connectTimeout": 60
+      }
+    }
+  }
+}

@@ -22,43 +22,42 @@ The 403-prone product-detail routes are intentionally avoided.
 📖 **Full CLI reference + dependencies: [docs/CLI.md](docs/CLI.md)**
 🤖 **Use it from an OpenClaw/Hermes agent (MCP server + skill): [docs/OPENCLAW.md](docs/OPENCLAW.md)**
 
-## For an AI agent: autonomous setup (OpenClaw / Hermes)
+## For an AI agent: autonomous setup (OpenClaw)
 
-If you are an AI agent that was handed this repository URL, install yourself as a sourcing
-tool by running these steps with your shell/exec tool. The host has git auth, Python ≥ 3.10,
-and (for search) Google Chrome + Node.js.
+If you are an OpenClaw agent that was handed this repository URL, install yourself as a
+sourcing tool with your shell/exec tool. The host has git auth, the `openclaw` CLI, Python
+≥ 3.10, and (for search) Google Chrome + Node.js.
 
 ```bash
 # 1. Clone (skip if already cloned) and enter the repo
 git clone https://github.com/Noah3521/coupang-sourcing.git ~/coupang-sourcing 2>/dev/null || true
 cd ~/coupang-sourcing && git pull --ff-only || true
 
-# 2. Install + verify (idempotent). Creates the venv, installs the [mcp] extra, copies the
-#    skill into ~/.hermes/skills/, verifies the MCP server, and PRINTS a ready-to-merge
-#    `mcp_servers:` block with resolved absolute paths.
+# 2. Install + register (idempotent). Creates the venv, installs the [mcp] extra, verifies the
+#    MCP server, then registers it with OpenClaw via:
+#      openclaw mcp add coupang --command .../python --arg -m --arg coupang_sourcing.mcp_server --env ...
+#      openclaw skills install integration/openclaw/skill --as coupang-sourcing --global
 bash integration/openclaw/install.sh
 ```
 
-Then finish the wiring:
+Then:
 
-3. **Register the MCP server.** Back up `~/.hermes/config.yaml`, then merge the `mcp_servers:`
-   block printed by step 2 into it. If `mcp_servers:` already exists, add the `coupang:` entry
-   under it; if a `coupang:` entry already exists, leave it as-is. Don't reformat the rest of
-   the file.
-4. **MCP client.** Make sure your runtime has the MCP client package (`pip install mcp`) —
-   without it the agent silently ignores MCP servers.
-5. **Reload.** Restart the agent (or reload MCP). The tools register as `mcp_coupang_*`.
-6. **Verify.** Call `mcp_coupang_find_products` with `{"board":"trending","top":3}`; you should
-   get 3 products. You're ready — see the installed `coupang-sourcing` skill for how to use the
+3. **Reload.** Restart / reload OpenClaw if it doesn't hot-load new MCP servers
+   (`openclaw mcp list` should show `coupang`; `openclaw mcp probe coupang --json` should list
+   its tools).
+4. **Verify.** Call the `coupang` server's `find_products` with `{"board":"trending","top":3}`;
+   you should get 3 products. You're ready — the installed `coupang-sourcing` skill explains the
    rest (`find_products`, `product_info`, `collect_seller`, `query_db`, …).
 
 Notes:
+- If the `openclaw` CLI isn't on PATH, step 2 prints manual steps instead: merge
+  [`integration/openclaw/mcp.config.json`](integration/openclaw/mcp.config.json) into
+  `~/.openclaw/openclaw.json` (under `mcp.servers`) and copy the skill to `~/.openclaw/skills/`.
 - Only `search`, `find_products(query=…)`, `collect=true`, and `product_info` from a bare link
   are Akamai-gated (need Chrome+Node; a brief headful Chrome mints cookies on first use).
   best100 discovery, `product_info` with a `store_url`, and `collect_seller` need neither.
-- Every tool persists to one SQLite DB (`~/.coupang-sourcing/sourcing.db` by default), so
-  sourcing data accumulates across calls.
-- Full human walkthrough: [docs/OPENCLAW.md](docs/OPENCLAW.md).
+- Every tool persists to one SQLite DB (`~/.coupang-sourcing/sourcing.db` by default).
+- Full walkthrough: [docs/OPENCLAW.md](docs/OPENCLAW.md).
 
 ## Install
 
