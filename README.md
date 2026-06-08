@@ -94,6 +94,9 @@ coupang-sourcing rank --board bestseller --db sourcing.db        # 7일 판매�
 coupang-sourcing rank --board bestseller --category 177195 --top 20 --db sourcing.db
 coupang-sourcing rank-categories --board bestseller              # list categoryIds to drill into
 
+# visualize the whole DB (and collect from the UI) — Streamlit dashboard
+pip install -e ".[dashboard]" && coupang-sourcing dashboard       # http://localhost:8501
+
 # collect search results (organic vs ads); first run mints Akamai cookies via a brief Chrome window
 coupang-sourcing search 의자 --db sourcing.db
 coupang-sourcing search 의자 --top 20 --json --db sourcing.db

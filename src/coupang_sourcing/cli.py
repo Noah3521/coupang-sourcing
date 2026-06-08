@@ -439,6 +439,35 @@ def mint_cookies_cmd(
 
 
 @app.command()
+def dashboard(
+    db: Path = typer.Option(Path.home() / ".coupang-sourcing" / "sourcing.db", "--db",
+                            help="SQLite DB to visualize (default: the MCP/agent DB)."),
+    port: int = typer.Option(8501, "--port"),
+    headless: bool = typer.Option(False, "--headless", help="Don't auto-open a browser tab."),
+):
+    """Launch the Streamlit sourcing dashboard (visualize the DB + collect from the UI)."""
+    import importlib.util
+    import os
+    import subprocess
+    import sys
+    try:
+        import streamlit  # noqa: F401
+    except ImportError:
+        err_console.print("[red]streamlit not installed[/red] — run: uv pip install -e \".[dashboard]\"")
+        raise typer.Exit(1) from None
+    spec = importlib.util.find_spec("coupang_sourcing.dashboard")
+    if not spec or not spec.origin:
+        err_console.print("[red]dashboard module not found[/red]")
+        raise typer.Exit(1)
+    env = {**os.environ, "COUPANG_SOURCING_DB": str(db)}
+    out_console.print(f"[green]launching dashboard[/green] db={db} → http://localhost:{port}")
+    cmd = [sys.executable, "-m", "streamlit", "run", spec.origin, "--server.port", str(port)]
+    if headless:
+        cmd += ["--server.headless", "true"]
+    subprocess.run(cmd, env=env)
+
+
+@app.command()
 def refresh(
     db: Path = typer.Option(Path("coupang_sourcing.db"), "--db"),
     config_path: Path | None = typer.Option(None, "--config"),

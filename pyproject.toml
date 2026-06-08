@@ -17,6 +17,10 @@ dev = [
 mcp = [
     "mcp>=1.0",
 ]
+dashboard = [
+    "streamlit>=1.30",
+    "pandas>=2.0",
+]
 
 [project.scripts]
 coupang-sourcing = "coupang_sourcing.cli:app"
