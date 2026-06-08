@@ -152,7 +152,35 @@ def _read_devtools_port(user_data_dir: str, timeout: float) -> int:
     raise RuntimeError("Chrome did not expose a DevTools port")
 
 
+def _profile_dir() -> str:
+    # Persistent profile (real GPU, no automation flag) so the browser looks like an
+    # established human session rather than a fresh bot: Akamai fingerprints the browser
+    # (navigator.webdriver, WebGL vendor, profile age), not just the IP — a human on the
+    # same IP never gets blocked.
+    base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
+    d = os.path.join(base, "coupang-sourcing", "chrome-profile")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
 def mint_cookies(
+    url: str = DEFAULT_MINT_URL, *, timeout: float = 45.0, progress=None
+) -> list[dict[str, str]]:
+    """Mint Akamai cookies; on failure reset the (possibly corrupted) profile and retry once.
+
+    An interrupted mint can leave the persistent Chrome profile in a state where the next
+    launch fails ("0 cookies"), so we self-heal by wiping it and retrying.
+    """
+    try:
+        return _mint_once(url, timeout=timeout, progress=progress)
+    except RuntimeError:
+        if progress:
+            progress("mint 실패 — 브라우저 프로필 초기화 후 1회 재시도…")
+        shutil.rmtree(_profile_dir(), ignore_errors=True)
+        return _mint_once(url, timeout=timeout, progress=progress)
+
+
+def _mint_once(
     url: str = DEFAULT_MINT_URL, *, timeout: float = 45.0, progress=None
 ) -> list[dict[str, str]]:
     """Launch a headful Chrome, solve Akamai, and return the minted coupang cookies.
@@ -162,13 +190,7 @@ def mint_cookies(
     """
     chrome = find_chrome()
     node = find_node()
-    # Persistent profile (real GPU, no automation flag) so the browser looks like an
-    # established human session rather than a fresh bot: Akamai fingerprints the browser
-    # (navigator.webdriver, WebGL vendor, profile age), not just the IP — a human on the
-    # same IP never gets blocked.
-    base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
-    profile_dir = os.path.join(base, "coupang-sourcing", "chrome-profile")
-    os.makedirs(profile_dir, exist_ok=True)
+    profile_dir = _profile_dir()
     # Drop any stale DevTools port file so we read the new instance's port.
     try:
         os.remove(os.path.join(profile_dir, "DevToolsActivePort"))
