@@ -459,9 +459,22 @@ def dashboard(
     if not spec or not spec.origin:
         err_console.print("[red]dashboard module not found[/red]")
         raise typer.Exit(1)
+    # Skip Streamlit's interactive first-run "Email:" prompt (it would block a headless launch).
+    cred = Path.home() / ".streamlit" / "credentials.toml"
+    if not cred.exists():
+        cred.parent.mkdir(parents=True, exist_ok=True)
+        cred.write_text('[general]\nemail = ""\n')
     env = {**os.environ, "COUPANG_SOURCING_DB": str(db)}
     out_console.print(f"[green]launching dashboard[/green] db={db} → http://localhost:{port}")
-    cmd = [sys.executable, "-m", "streamlit", "run", spec.origin, "--server.port", str(port)]
+    cmd = [
+        sys.executable, "-m", "streamlit", "run", spec.origin, "--server.port", str(port),
+        # Force a light theme so text stays dark regardless of the user's global/system theme.
+        "--theme.base", "light",
+        "--theme.primaryColor", "#C81E2E",
+        "--theme.backgroundColor", "#f4f6f9",
+        "--theme.secondaryBackgroundColor", "#ffffff",
+        "--theme.textColor", "#0f172a",
+    ]
     if headless:
         cmd += ["--server.headless", "true"]
     subprocess.run(cmd, env=env)
