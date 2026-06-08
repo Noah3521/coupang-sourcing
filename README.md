@@ -19,12 +19,18 @@ stable `www.coupang.com/next-api/review` endpoint (productId only).
 `store/getStoreInfo`, `listing`, `store/getStoreReview`, `main_category`, `next-api/review`.
 The 403-prone product-detail routes are intentionally avoided.
 
+📖 **Full CLI reference + dependencies: [docs/CLI.md](docs/CLI.md)**
+
 ## Install
 
 ```bash
 cd ~/coupang-sourcing
 uv venv && uv pip install -e ".[dev]"     # or: python -m venv .venv && pip install -e ".[dev]"
 ```
+
+> Most commands need only Python + the three pip deps (no browser, no login). `search`,
+> `mint-cookies`, and `--collect` additionally need **Google Chrome + Node.js** (to mint
+> Akamai cookies via a brief headful browser) — see [docs/CLI.md](docs/CLI.md).
 
 ## Usage
 
