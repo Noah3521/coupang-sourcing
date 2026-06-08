@@ -15,6 +15,23 @@ from .config import BASE_WWW
 
 STORE_ID_RE = re.compile(r"^[A-Z]\d{5,}$")
 
+BEST100_BOARDS = ("trending", "bestseller")
+
+
+def best100_url(board: str, category: str = "all") -> str:
+    """Build a best100 ranking URL: /np/best100/{board}/{category}.
+
+    board ∈ {trending (24h 급상승), bestseller (7일 베스트)};
+    category is "all" or a numeric categoryId (any depth — each page self-describes
+    its child categories, so one id handles every level).
+    """
+    if board not in BEST100_BOARDS:
+        raise ValueError(f"board must be one of {BEST100_BOARDS}: {board!r}")
+    category = (str(category).strip() if category is not None else "") or "all"
+    if category != "all" and not category.isdigit():
+        raise ValueError(f"category must be 'all' or a numeric id: {category!r}")
+    return f"{BASE_WWW}/np/best100/{board}/{category}"
+
 
 def parse_store(value: str) -> str:
     """Extract a store url-name (e.g. A00333576) from a shop URL or raw id."""

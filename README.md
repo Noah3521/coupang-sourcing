@@ -44,6 +44,21 @@ coupang-sourcing batch examples/batch_input.csv --db sourcing.db
 coupang-sourcing refresh --all --db sourcing.db
 coupang-sourcing refresh --store A00333576 --older-than 7 --db sourcing.db
 
+# collect a best100 ranking (no browser / no credentials needed)
+coupang-sourcing rank --board trending --db sourcing.db          # 24시간 급상승
+coupang-sourcing rank --board bestseller --db sourcing.db        # 7일 판매량 베스트
+coupang-sourcing rank --board bestseller --category 177195 --top 20 --db sourcing.db
+coupang-sourcing rank-categories --board bestseller              # list categoryIds to drill into
+
+# collect search results (organic vs ads); first run mints Akamai cookies via a brief Chrome window
+coupang-sourcing search 의자 --db sourcing.db
+coupang-sourcing search 의자 --top 20 --json --db sourcing.db
+coupang-sourcing mint-cookies                                    # force-refresh the cookie cache
+
+# discovery → full collection: resolve sellers + crawl their catalogs (rank or search)
+coupang-sourcing search 의자 --collect --db sourcing.db
+coupang-sourcing rank --board bestseller --category 177195 --collect --db sourcing.db
+
 # export DB tables to CSV/JSON
 coupang-sourcing export --table products --format csv --out products.csv --db sourcing.db
 coupang-sourcing export --table products --min-score 70 --store A00333576 --db sourcing.db
@@ -59,11 +74,57 @@ coupang-sourcing schedule uninstall
 Add `--json` for machine-readable output, `--no-reviews` to skip review collection,
 `--out DIR` (on `product`) to also dump JSON + reviews CSV.
 
+### rank
+
+Collects a **best100 ranking** straight from the public `/np/best100/{board}/{category}`
+pages — no browser and no credentials, parsed from the server-rendered HTML with the same
+chrome-impersonating client. `--board` is `trending` (24h 급상승) or `bestseller` (7일 베스트);
+`--category` is `all` or a `categoryId`. Each ranking row carries `rank`, `productId`,
+`itemId`, `vendorItemId`, price, rating, review count and **channel / 판매유형** (rocket /
+rocket_fresh / rocket_merchant / seller), and is appended to `rank_snapshots` (a time series,
+so re-running tracks rank movement). Rows whose `productId` is already in `products` are
+flagged, so a ranking doubles as a **discovery feed** — tracked products vs new candidates to
+feed into `product`/`batch`. The recommendation widget at the bottom of the page is dropped
+(only the `toprank_unit` ranking is kept).
+
+`rank-categories` lists the `categoryId`/name links on a board page so you can drill down
+(top categories → subcategories — one `--category {id}` handles any depth).
+
+### search (Akamai-gated — needs a browser cookie)
+
+`search QUERY` collects a search-results page from `/np/search`, separating **organic**
+(`sourceType=search`) from **ads** (`sourceType=srp_product_ads`) — each row keeps its page
+position (`rank`) plus an `isAd` flag, and lands in `search_snapshots`. Unlike best100,
+`/np/search` is hard-gated by Akamai, so the first gated call **mints cookies via a brief
+headful Chrome window** (a real browser solves the sensor; *headless gets blocked*), then
+caches them at `~/.config/coupang-sourcing/cookies.json` and replays them through the normal
+chrome-impersonating client for fast bulk fetches. Cookies are re-minted automatically when
+they expire or get a 403/challenge; `mint-cookies` forces a refresh. Requires Chrome (and
+Node, used only to drive Chrome over CDP); override discovery with `COUPANG_CHROME` /
+`COUPANG_NODE`.
+
+### --collect (discovery → full collection)
+
+`rank ... --collect` and `search ... --collect` resolve each result's **seller** — the cards
+carry only product/item/vendorItem ids, so we read `vp/products/{pid}/vendoritems/{vid}` (a
+gated JSON whose `vendor.id` is the store url-name) — then feed the marketplace ones into the
+normal `(product, store)` batch flow for full price/metadata/reviews/metrics collection.
+Resolution is ~once per seller (cookie, bulk-safe); the catalog crawl itself runs on the
+cookie-free `listing` API. Coupang-direct (로켓 직매입) items have no marketplace store and
+are skipped.
+
+> Notes: a best100 page server-renders ~the top ~30 ranked items (the rest load via scroll/JS,
+> which we don't execute). At the **category** level `trending` and `bestseller` largely
+> coincide; the distinction is sharpest at `--category all`. The ranking cards expose
+> product/item/vendorItem ids but **not** a per-product seller `vendorId`, so seller-level
+> linkage still goes through the (product, store) flow.
+
 ### export
 
 Dumps a table (`products`, `reviews`, `product_snapshots`, `product_variants`, `stores`,
-`vendor_map`) to CSV or JSON. The `products` table can be filtered with `--store` and
-`--min-score` and is sorted by sourcing score. Table names are whitelisted.
+`vendor_map`, `rank_snapshots`, `search_snapshots`) to CSV or JSON. The `products` table can
+be filtered with `--store` and `--min-score` and is sorted by sourcing score. Table names are
+whitelisted.
 
 ### schedule
 
@@ -81,6 +142,8 @@ installing. On non-macOS hosts it prints a `crontab -e` line instead.
 | `product_snapshots` | **time series**: price / review_total / rating per crawl |
 | `reviews` | review rows for text mining |
 | `stores`, `vendor_map` | store metadata + vendorName↔vendorId cache |
+| `rank_snapshots` | **time series**: best100 ranking rows (board/category/rank → product) |
+| `search_snapshots` | **time series**: search-result rows (query/rank, organic vs ad flag, resolved store) |
 
 ## Sourcing metrics
 

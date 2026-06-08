@@ -11,6 +11,9 @@ from rich.table import Table
 from . import exporters, scheduler, storage
 from .collectors import batch as batch_mod
 from .collectors import product as product_mod
+from .collectors import ranking as ranking_mod
+from .collectors import search as search_mod
+from .collectors import seller as seller_mod
 from .collectors import store as store_mod
 from .config import Config
 from .http_client import CoupangClient
@@ -38,6 +41,24 @@ def _progress_fn(quiet: bool):
     if quiet:
         return None
     return lambda message: err_console.print(f"[dim]· {message}[/dim]")
+
+
+def _full_collect_resolved(client: CoupangClient, cfg: Config, items: list[dict], progress) -> int:
+    """Resolve each ranked/searched row to its seller, then full-collect marketplace ones.
+
+    Annotates items in place with `store`; reuses the existing (product, store) batch flow,
+    so resolution (cookie, ~once per seller) feeds the cookie-free, bulk-safe listing crawl.
+    """
+    seller_mod.resolve_sellers(client, items, progress=progress)
+    pairs = [(str(it["productId"]), it["store"]) for it in items if it.get("store")]
+    if not pairs:
+        return 0
+    storage.init_db(cfg.db_path)
+    records = batch_mod.collect_batch(
+        client, pairs, cfg, progress=progress,
+        on_record=lambda rec: storage.save_record(cfg.db_path, rec),
+    )
+    return len(records)
 
 
 def _print_record_table(record: ProductRecord) -> None:
@@ -192,6 +213,229 @@ def batch(
             )
         out_console.print(table)
         out_console.print(f"[green]saved to DB[/green] {cfg.db_path.resolve()}")
+
+
+@app.command()
+def rank(
+    board: str = typer.Option("bestseller", "--board",
+                              help="trending (24h 급상승) | bestseller (7일 베스트)."),
+    category: str = typer.Option("all", "--category",
+                                 help="'all' or a categoryId (see rank-categories)."),
+    top: int = typer.Option(0, "--top", help="Limit to the first N ranked items (0 = all on page 1)."),
+    collect: bool = typer.Option(False, "--collect",
+                                 help="Resolve sellers (browser cookie) + full-collect marketplace items."),
+    db: Path = typer.Option(Path("coupang_sourcing.db"), "--db"),
+    config_path: Path | None = typer.Option(None, "--config"),
+    rate: float | None = typer.Option(None, "--rate"),
+    timeout: float | None = typer.Option(None, "--timeout"),
+    retries: int | None = typer.Option(None, "--retries"),
+    save_db: bool = typer.Option(True, "--db-save/--no-db-save", help="Append to rank_snapshots."),
+    as_json: bool = typer.Option(False, "--json", help="Print machine-readable JSON only."),
+    quiet: bool = typer.Option(False, "-q", "--quiet"),
+):
+    """Collect a best100 ranking (trending/bestseller, optionally by category).
+
+    No browser/credentials needed (best100 is open). Ranked rows already in the DB are
+    flagged so the ranking doubles as a discovery feed. With --collect, marketplace sellers
+    are resolved (browser-minted cookie) and their products fully collected.
+    """
+    if board not in ranking_mod.BOARDS:
+        err_console.print(f"[red]--board must be one of {ranking_mod.BOARDS}[/red]")
+        raise typer.Exit(1)
+    cfg = _build_config(db, config_path, rate, timeout, retries, None)
+    progress = _progress_fn(quiet or as_json)
+    client = CoupangClient(cfg)
+    try:
+        result = ranking_mod.collect_ranking(client, board, category, top=top, progress=progress)
+    except (ValueError, RuntimeError) as exc:
+        err_console.print(f"[red]error:[/red] {exc}")
+        raise typer.Exit(1) from exc
+    items = result["items"]
+
+    known_ids: set[str] = set()
+    if cfg.db_path.exists():
+        conn = storage.connect(cfg.db_path)
+        known_ids = storage.existing_product_ids(conn)
+        conn.close()
+    for it in items:
+        it["inDb"] = str(it["productId"]) in known_ids
+
+    collected = 0
+    if collect:
+        try:
+            collected = _full_collect_resolved(client, cfg, items, progress)
+        except RuntimeError as exc:
+            err_console.print(f"[red]collect error:[/red] {exc}")
+
+    captured_at = None
+    if save_db:
+        storage.init_db(cfg.db_path)
+        captured_at = storage.save_ranking(cfg.db_path, board, str(category), items)
+
+    known = sum(1 for it in items if it["inDb"])
+    new = len(items) - known
+    if as_json:
+        out_console.print_json(jsonlib.dumps({
+            "board": board, "category": str(category), "url": result["url"],
+            "capturedAt": captured_at or result["capturedAt"],
+            "count": len(items), "inDb": known, "new": new, "collected": collected, "items": items,
+        }, ensure_ascii=False))
+        return
+
+    table = Table(title=f"{board} / {category}  ({len(items)} ranked)")
+    for col in ("#", "productId", "title", "price", "rating", "channel", "DB"):
+        table.add_column(col)
+    for it in items:
+        table.add_row(
+            str(it["rank"]), str(it["productId"]), (it["title"] or "")[:38],
+            f"{it['price']:,}" if it["price"] else "-",
+            f"{it['ratingAverage']} ({it['reviewCount']})" if it["ratingAverage"] else "-",
+            it["channel"], "✓" if it["inDb"] else "",
+        )
+    out_console.print(table)
+    out_console.print(f"[green]{len(items)} ranked[/green] · DB에 있음 {known} · 신규 후보 {new}")
+    if collect:
+        out_console.print(f"[green]full-collected[/green] {collected} marketplace products")
+    if save_db:
+        out_console.print(f"[green]saved to DB[/green] {cfg.db_path.resolve()}")
+
+
+@app.command("rank-categories")
+def rank_categories(
+    board: str = typer.Option("bestseller", "--board", help="trending | bestseller."),
+    category: str = typer.Option("all", "--category", help="Parent categoryId to list children of."),
+    db: Path = typer.Option(Path("coupang_sourcing.db"), "--db"),
+    config_path: Path | None = typer.Option(None, "--config"),
+    rate: float | None = typer.Option(None, "--rate"),
+    timeout: float | None = typer.Option(None, "--timeout"),
+    retries: int | None = typer.Option(None, "--retries"),
+    as_json: bool = typer.Option(False, "--json"),
+    quiet: bool = typer.Option(False, "-q", "--quiet"),
+):
+    """List the best100 categories available on a board/category page (for drill-down)."""
+    if board not in ranking_mod.BOARDS:
+        err_console.print(f"[red]--board must be one of {ranking_mod.BOARDS}[/red]")
+        raise typer.Exit(1)
+    cfg = _build_config(db, config_path, rate, timeout, retries, None)
+    progress = _progress_fn(quiet or as_json)
+    client = CoupangClient(cfg)
+    try:
+        cats = ranking_mod.collect_categories(client, board, category, progress)
+    except (ValueError, RuntimeError) as exc:
+        err_console.print(f"[red]error:[/red] {exc}")
+        raise typer.Exit(1) from exc
+    if as_json:
+        out_console.print_json(jsonlib.dumps(cats, ensure_ascii=False))
+        return
+    table = Table(title=f"best100 categories ({board}/{category})")
+    table.add_column("categoryId")
+    table.add_column("name")
+    for c in cats:
+        table.add_row(c["categoryId"], c["name"])
+    out_console.print(table)
+    out_console.print(f"[dim]drill down: coupang-sourcing rank --board {board} --category <id>[/dim]")
+
+
+@app.command()
+def search(
+    query: str = typer.Argument(..., help="Search keyword (e.g. 의자)."),
+    page: int = typer.Option(1, "--page", help="Result page (1 = first page)."),
+    top: int = typer.Option(0, "--top", help="Limit to the first N results (0 = all on page)."),
+    collect: bool = typer.Option(False, "--collect",
+                                 help="Resolve sellers + full-collect marketplace results."),
+    db: Path = typer.Option(Path("coupang_sourcing.db"), "--db"),
+    config_path: Path | None = typer.Option(None, "--config"),
+    rate: float | None = typer.Option(None, "--rate"),
+    timeout: float | None = typer.Option(None, "--timeout"),
+    retries: int | None = typer.Option(None, "--retries"),
+    save_db: bool = typer.Option(True, "--db-save/--no-db-save", help="Append to search_snapshots."),
+    as_json: bool = typer.Option(False, "--json"),
+    quiet: bool = typer.Option(False, "-q", "--quiet"),
+):
+    """Collect a search-results ranking (organic vs ads separated).
+
+    Search is Akamai-gated, so the first call mints Akamai cookies via a brief headful
+    Chrome window (then cached/reused). Ads (`sourceType=srp_product_ads`) are flagged
+    separately from organic results.
+    """
+    cfg = _build_config(db, config_path, rate, timeout, retries, None)
+    progress = _progress_fn(quiet or as_json)
+    client = CoupangClient(cfg)
+    try:
+        result = search_mod.collect_search(client, query, page=page, top=top, progress=progress)
+    except (ValueError, RuntimeError) as exc:
+        err_console.print(f"[red]error:[/red] {exc}")
+        raise typer.Exit(1) from exc
+    items = result["items"]
+
+    known_ids: set[str] = set()
+    if cfg.db_path.exists():
+        conn = storage.connect(cfg.db_path)
+        known_ids = storage.existing_product_ids(conn)
+        conn.close()
+    for it in items:
+        it["inDb"] = str(it["productId"]) in known_ids
+
+    collected = 0
+    if collect:
+        try:
+            collected = _full_collect_resolved(client, cfg, items, progress)
+        except RuntimeError as exc:
+            err_console.print(f"[red]collect error:[/red] {exc}")
+
+    captured_at = None
+    if save_db:
+        storage.init_db(cfg.db_path)
+        captured_at = storage.save_search(cfg.db_path, query, items)
+
+    organic = [it for it in items if not it["isAd"]]
+    ads = [it for it in items if it["isAd"]]
+    known = sum(1 for it in items if it["inDb"])
+    if as_json:
+        out_console.print_json(jsonlib.dumps({
+            "query": query, "page": page, "url": result["url"],
+            "capturedAt": captured_at or result["capturedAt"],
+            "count": len(items), "organic": len(organic), "ads": len(ads),
+            "inDb": known, "new": len(items) - known, "collected": collected, "items": items,
+        }, ensure_ascii=False))
+        return
+
+    table = Table(title=f"search: {query} ({len(organic)} organic + {len(ads)} ads)")
+    for col in ("#", "ad", "productId", "title", "price", "rating", "DB"):
+        table.add_column(col)
+    for it in items:
+        table.add_row(
+            str(it["rank"]), "AD" if it["isAd"] else "", str(it["productId"]),
+            (it["title"] or "")[:36], f"{it['price']:,}" if it["price"] else "-",
+            f"{it['ratingAverage']} ({it['reviewCount']})" if it["ratingAverage"] else "-",
+            "✓" if it["inDb"] else "",
+        )
+    out_console.print(table)
+    out_console.print(
+        f"[green]{len(items)} results[/green] · 일반 {len(organic)} · 광고 {len(ads)} · "
+        f"DB에 있음 {known} · 신규 {len(items) - known}"
+    )
+    if collect:
+        out_console.print(f"[green]full-collected[/green] {collected} marketplace products")
+    if save_db:
+        out_console.print(f"[green]saved to DB[/green] {cfg.db_path.resolve()}")
+
+
+@app.command("mint-cookies")
+def mint_cookies_cmd(
+    db: Path = typer.Option(Path("coupang_sourcing.db"), "--db"),
+    config_path: Path | None = typer.Option(None, "--config"),
+):
+    """Force-refresh the browser-minted Akamai cookies (opens a brief headful Chrome window)."""
+    from .cookies import cookie_path
+    cfg = _build_config(db, config_path, None, None, None, None)
+    client = CoupangClient(cfg)
+    try:
+        client.remint(progress=lambda m: err_console.print(f"[dim]· {m}[/dim]"))
+    except RuntimeError as exc:
+        err_console.print(f"[red]error:[/red] {exc}")
+        raise typer.Exit(1) from exc
+    out_console.print(f"[green]minted[/green] Akamai cookies → {cookie_path()}")
 
 
 @app.command()

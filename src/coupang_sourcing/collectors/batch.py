@@ -56,8 +56,13 @@ def collect_batch(
     for store, product_id_list in by_store.items():
         if progress:
             progress(f"store {store}: resolving + scanning listing once for {len(product_id_list)} products")
-        store_info = store_mod.resolve_store(client, store)
-        index = store_mod.build_listing_index(client, store_info, config, progress)
+        try:
+            store_info = store_mod.resolve_store(client, store)
+            index = store_mod.build_listing_index(client, store_info, config, progress)
+        except Exception as exc:  # noqa: BLE001 — one unreachable store shouldn't abort the batch
+            if progress:
+                progress(f"  store {store} unavailable ({exc!r}) — skipped"[:160])
+            continue
         for ids in product_id_list:
             pid = str(ids["productId"])
             variants = index.get(pid)

@@ -36,9 +36,23 @@ CREATE TABLE IF NOT EXISTS reviews(
   review_id TEXT PRIMARY KEY, product_id TEXT, rating INTEGER, title TEXT,
   content TEXT, option_name TEXT, review_at INTEGER, helpful_count INTEGER, has_media INTEGER);
 CREATE TABLE IF NOT EXISTS vendor_map(vendor_name TEXT PRIMARY KEY, vendor_id TEXT, store_id TEXT);
+CREATE TABLE IF NOT EXISTS rank_snapshots(
+  board TEXT, category TEXT, captured_at TEXT, rank INTEGER,
+  product_id TEXT, item_id TEXT, vendor_item_id TEXT,
+  title TEXT, price INTEGER, rating_avg REAL, review_total INTEGER,
+  channel TEXT, in_products INTEGER,
+  PRIMARY KEY(board, category, captured_at, rank));
+CREATE TABLE IF NOT EXISTS search_snapshots(
+  query TEXT, captured_at TEXT, rank INTEGER, is_ad INTEGER, source_type TEXT,
+  product_id TEXT, item_id TEXT, vendor_item_id TEXT,
+  title TEXT, price INTEGER, original_price INTEGER, discount_rate INTEGER,
+  rating_avg REAL, review_total INTEGER, store TEXT, in_products INTEGER,
+  PRIMARY KEY(query, captured_at, rank));
 CREATE INDEX IF NOT EXISTS idx_snapshots_product ON product_snapshots(product_id);
 CREATE INDEX IF NOT EXISTS idx_variants_product ON product_variants(product_id);
 CREATE INDEX IF NOT EXISTS idx_reviews_product ON reviews(product_id);
+CREATE INDEX IF NOT EXISTS idx_rank_product ON rank_snapshots(product_id);
+CREATE INDEX IF NOT EXISTS idx_search_product ON search_snapshots(product_id);
 """
 
 
@@ -132,6 +146,65 @@ def save_record(db_path: Path, record: ProductRecord) -> None:
         conn.close()
 
 
+def existing_product_ids(conn: sqlite3.Connection) -> set[str]:
+    """Set of productIds already collected (for the ranking 'in DB' flag)."""
+    return {str(r[0]) for r in conn.execute("SELECT product_id FROM products").fetchall()}
+
+
+def save_ranking(
+    db_path: Path, board: str, category: str, items: list[dict[str, Any]]
+) -> str:
+    """Append one best100 ranking capture; returns the captured_at timestamp.
+
+    Sets `in_products=1` for rows whose productId is already in the `products` table,
+    so a ranking doubles as a discovery feed (already-tracked vs new candidates).
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    conn = connect(db_path)
+    try:
+        known = existing_product_ids(conn)
+        for it in items:
+            pid = str(it.get("productId"))
+            conn.execute(
+                "INSERT OR REPLACE INTO rank_snapshots VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    board, str(category), now, it.get("rank"),
+                    pid, str(it.get("itemId")), str(it.get("vendorItemId")),
+                    it.get("title"), it.get("price"), it.get("ratingAverage"),
+                    it.get("reviewCount"), it.get("channel"),
+                    1 if pid in known else 0,
+                ),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+    return now
+
+
+def save_search(db_path: Path, query: str, items: list[dict[str, Any]]) -> str:
+    """Append one search-results capture (organic + ads, each flagged); returns captured_at."""
+    now = datetime.now(timezone.utc).isoformat()
+    conn = connect(db_path)
+    try:
+        known = existing_product_ids(conn)
+        for it in items:
+            pid = str(it.get("productId"))
+            conn.execute(
+                "INSERT OR REPLACE INTO search_snapshots VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    str(query), now, it.get("rank"), 1 if it.get("isAd") else 0, it.get("sourceType"),
+                    pid, str(it.get("itemId")), str(it.get("vendorItemId")),
+                    it.get("title"), it.get("price"), it.get("originalPrice"), it.get("discountRate"),
+                    it.get("ratingAverage"), it.get("reviewCount"), it.get("store"),
+                    1 if pid in known else 0,
+                ),
+            )
+        conn.commit()
+    finally:
+        conn.close()
+    return now
+
+
 def list_products_for_refresh(
     conn: sqlite3.Connection, *, store: str | None = None, older_than_days: int | None = None
 ) -> list[dict[str, Any]]:
@@ -154,14 +227,16 @@ def list_products_for_refresh(
 def table_counts(db_path: Path) -> dict[str, int]:
     conn = connect(db_path)
     try:
-        tables = ["stores", "products", "product_variants", "product_snapshots", "reviews", "vendor_map"]
+        tables = ["stores", "products", "product_variants", "product_snapshots",
+                  "reviews", "vendor_map", "rank_snapshots", "search_snapshots"]
         return {t: conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in tables}
     finally:
         conn.close()
 
 
 # Tables that `export` is allowed to dump (whitelist guards the f-string query).
-EXPORTABLE_TABLES = ("products", "reviews", "product_snapshots", "product_variants", "stores", "vendor_map")
+EXPORTABLE_TABLES = ("products", "reviews", "product_snapshots", "product_variants",
+                     "stores", "vendor_map", "rank_snapshots", "search_snapshots")
 
 
 def fetch_products(
