@@ -20,6 +20,7 @@ stable `www.coupang.com/next-api/review` endpoint (productId only).
 The 403-prone product-detail routes are intentionally avoided.
 
 📖 **Full CLI reference + dependencies: [docs/CLI.md](docs/CLI.md)**
+🤖 **Use it from an OpenClaw/Hermes agent (MCP server + skill): [docs/OPENCLAW.md](docs/OPENCLAW.md)**
 
 ## Install
 
