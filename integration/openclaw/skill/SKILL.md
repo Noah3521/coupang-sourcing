@@ -25,6 +25,8 @@ grows over time.
 | `query_db` | Read accumulated data: `table` = products \| rank_snapshots \| search_snapshots \| reviews \| stores. `products` supports `min_score`/`store`. |
 | `list_categories` | List best100 categoryIds to drill into `find_products`. |
 | `refresh_cookies` | Force-refresh Akamai cookies (only if a gated call keeps failing). |
+| `source_1688` | Find the **1688 origin/원가** of Coupang product(s) by image search. `product_id` → one product (else all un-sourced). Stores top-N 1688 offers + full metadata as children. `top`/`headless_top`/`limit`/`resource`. Slow (headless renders). |
+| `query_1688` | Read stored 1688 origins: `product_id` → that product's ranked 1688 offers (price¥/sales/seller); none → products sourced + cheapest 1688 price. |
 
 ## Workflows
 **"~ 조건으로 찾아줘"** — pick the source, then filter:
@@ -37,6 +39,8 @@ grows over time.
 **Seller catalog** — `collect_seller(store="<shop url or A0...>")`.
 
 **Query accumulated data** — `query_db(table="products", min_score=70)` for best candidates.
+
+**"이 쿠팡 상품 1688 원가 찾아줘" / 소싱 마진** — `source_1688(product_id="<id>")` (없으면 미소싱 전체), 그다음 `query_1688(product_id="<id>")`로 1688 후보(가격¥·판매·판매자) 표시. 쿠팡 판매가 vs 1688 원가로 마진 코멘트. 헤드리스 렌더라 **느리다** — 한 상품씩 또는 `limit`로 좁히고 "시간이 걸린다"고 안내. (별도 1회 셋업 필요: `integration/aliprice-1688` → `bash install.sh` + `node decrypt-cookies.js`.)
 
 ## Rules
 - **best100 (no `query`) needs no browser and is fast/bulk-safe** — prefer it for broad discovery.

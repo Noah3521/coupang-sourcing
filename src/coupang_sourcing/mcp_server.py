@@ -25,6 +25,9 @@ mcp.tool()(service.collect_seller)
 mcp.tool()(service.query_db)
 mcp.tool()(service.list_categories)
 mcp.tool()(service.refresh_cookies)
+# 1688 origin sourcing (integration/aliprice-1688, Node bridge)
+mcp.tool()(service.source_1688)
+mcp.tool()(service.query_1688)
 
 
 def main() -> None:

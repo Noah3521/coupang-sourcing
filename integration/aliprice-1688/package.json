@@ -1,0 +1,14 @@
+{
+  "name": "aliprice-1688-sourcing",
+  "version": "1.0.0",
+  "description": "Coupang → 1688 origin sourcing. Image-search each Coupang product on AliPrice and store the top-N 1688 offers (full metadata) into the coupang-sourcing SQLite DB.",
+  "type": "commonjs",
+  "engines": { "node": ">=22.5" },
+  "scripts": {
+    "cookies": "node decrypt-cookies.js",
+    "source": "node sourcing-pipeline.js"
+  },
+  "dependencies": {
+    "playwright": "^1.60.0"
+  }
+}
