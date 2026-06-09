@@ -236,7 +236,12 @@ def table_counts(db_path: Path) -> dict[str, int]:
 
 # Tables that `export` is allowed to dump (whitelist guards the f-string query).
 EXPORTABLE_TABLES = ("products", "reviews", "product_snapshots", "product_variants",
-                     "stores", "vendor_map", "rank_snapshots", "search_snapshots")
+                     "stores", "vendor_map", "rank_snapshots", "search_snapshots",
+                     # 1688 sourcing (integration/aliprice-1688)
+                     "s1688_offers", "s1688_shop", "s1688_price_history",
+                     "s1688_sales_history", "s1688_sale_ranges", "s1688_price_ladder",
+                     "s1688_sku", "s1688_specs", "s1688_gallery", "s1688_identities",
+                     "sourcing_runs", "sourcing_product_status")
 
 
 def fetch_products(

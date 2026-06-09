@@ -11,6 +11,7 @@ Env:
 from __future__ import annotations
 
 import os
+import subprocess
 from pathlib import Path
 
 from . import storage
@@ -254,3 +255,108 @@ def refresh_cookies() -> dict:
         return {"ok": True, "note": "Akamai cookies re-minted and cached."}
     except RuntimeError as exc:
         return {"error": str(exc)}
+
+
+# ── 1688 origin sourcing (integration/aliprice-1688, Node bridge) ──────────────
+
+def _aliprice_pipeline() -> Path:
+    return Path(__file__).resolve().parents[2] / "integration" / "aliprice-1688" / "sourcing-pipeline.js"
+
+
+def source_1688(product_id: str = "", limit: int = 0, top: int = 10,
+                headless_top: int = 3, resource: bool = False) -> dict:
+    """Find 1688 origin offers for Coupang product(s) via AliPrice image search.
+
+    For each Coupang product, image-searches 1688 and stores the top-N offers with full
+    metadata (price/sales history, seller metrics, SKU, specs, price ladder, gallery) into
+    the same DB as children of the product (`s1688_*` tables; read them with `query_1688`).
+    Idempotent: products already sourced ('ok') are skipped unless `resource=True`.
+
+    Args:
+      product_id: source one product (else all un-sourced, sourcing_score order).
+      limit: cap number of products processed.
+      top: 1688 offers stored per product (default 10).
+      headless_top: how many top offers get full headless scrape (SKU/specs/ladder/gallery).
+      resource: re-source products already done.
+
+    Requires Node + integration deps (`bash integration/aliprice-1688/install.sh`) and valid
+    AliPrice/1688 session cookies (`node decrypt-cookies.js` in that dir). Set COUPANG_NODE to
+    override the node binary. Long-running (headless renders) — minutes for many products.
+    """
+    from . import browser
+    script = _aliprice_pipeline()
+    if not script.exists():
+        return {"error": f"1688 sourcing not installed: {script} missing"}
+    try:
+        node = browser.find_node()
+    except RuntimeError as exc:
+        return {"error": str(exc)}
+    args = [node, str(script), "--db", str(db_path()), "--top", str(int(top)),
+            "--headless-top", str(int(headless_top))]
+    if product_id:
+        args += ["--product-id", str(product_id)]
+    if limit:
+        args += ["--limit", str(int(limit))]
+    if resource:
+        args += ["--resource"]
+    try:
+        proc = subprocess.run(args, cwd=str(script.parent), capture_output=True,
+                              text=True, timeout=3600)
+    except FileNotFoundError:
+        return {"error": "node not executable; set COUPANG_NODE=/path/to/node"}
+    except subprocess.TimeoutExpired:
+        return {"error": "1688 sourcing timed out (>1h) — narrow with --limit/--product-id"}
+    log_tail = "\n".join((proc.stderr or "").strip().splitlines()[-10:])
+    if proc.returncode != 0:
+        return {"error": "1688 sourcing failed (cookies/deps?)",
+                "returncode": proc.returncode, "log": log_tail,
+                "hint": "run integration/aliprice-1688: `bash install.sh` then `node decrypt-cookies.js`"}
+    run = {}
+    db = db_path()
+    if db.exists():
+        conn = storage.connect(db)
+        try:
+            row = conn.execute(
+                "SELECT run_id,status,products_done,products_failed,offers_written "
+                "FROM sourcing_runs ORDER BY started_at DESC LIMIT 1").fetchone()
+            if row:
+                run = dict(row)
+        finally:
+            conn.close()
+    return {"ok": True, "run": run, "log": log_tail}
+
+
+def query_1688(product_id: str = "", limit: int = 10) -> dict:
+    """Read stored 1688 sourcing results (origin candidates).
+
+    `product_id` given → that Coupang product's ranked 1688 offers (price/sales + seller).
+    No `product_id` → Coupang products that have been sourced, with offer count and cheapest
+    1688 price (¥). Populate with `source_1688` first.
+    """
+    db = db_path()
+    if not db.exists():
+        return {"error": "no DB yet — run source_1688 first."}
+    conn = storage.connect(db)
+    try:
+        has = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='s1688_offers'").fetchone()
+        if not has:
+            return {"error": "no 1688 data yet — run source_1688 first."}
+        n = max(1, int(limit))
+        if product_id:
+            rows = conn.execute(
+                "SELECT o.rank, o.offer_id, o.title, o.price_cny, o.price_min_cny, o.price_max_cny, "
+                "o.month_sold, o.total_sales, o.repurchase_rate, o.category_name, o.detail_url, "
+                "sh.shop_name, sh.tpyear, sh.superfactory "
+                "FROM s1688_offers o LEFT JOIN s1688_shop sh USING(match_id) "
+                "WHERE o.coupang_product_id=? ORDER BY o.rank LIMIT ?",
+                (str(product_id), n)).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT o.coupang_product_id, p.title AS coupang_title, p.latest_price AS coupang_price, "
+                "COUNT(*) AS offers, MIN(o.price_cny) AS min_cny_1688 "
+                "FROM s1688_offers o LEFT JOIN products p ON p.product_id=o.coupang_product_id "
+                "GROUP BY o.coupang_product_id ORDER BY offers DESC LIMIT ?", (n,)).fetchall()
+        return {"product_id": product_id or None, "count": len(rows), "rows": [dict(r) for r in rows]}
+    finally:
+        conn.close()
