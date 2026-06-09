@@ -1,0 +1,18 @@
+# 로컬 세션 쿠키 (절대 커밋 금지 — 본인 로그인 세션 비밀값)
+cookie*.txt
+
+# 의존성 / 산출물
+node_modules/
+package-lock.json
+out*.json
+top*.json
+offer_*.json
+result*.json
+
+# 테스트 이미지 / DB
+*.png
+*.jpg
+*.jpeg
+*.db
+*.db-wal
+*.db-shm
